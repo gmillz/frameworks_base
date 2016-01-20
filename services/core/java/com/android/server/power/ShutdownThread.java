@@ -21,7 +21,6 @@ import android.app.ActivityManagerNative;
 import android.app.AlertDialog;
 import android.app.Dialog;
 import android.app.IActivityManager;
-import android.app.KeyguardManager;
 import android.app.ProgressDialog;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.IBluetoothManager;
@@ -47,10 +46,8 @@ import android.os.storage.IMountService;
 import android.os.storage.IMountShutdownObserver;
 import android.system.ErrnoException;
 import android.system.Os;
-import android.provider.Settings;
 
 import com.android.internal.telephony.ITelephony;
-import com.android.internal.util.slim.BuildInfo;
 import com.android.server.pm.PackageManagerService;
 
 import android.util.Log;
@@ -184,49 +181,37 @@ public final class ShutdownThread extends Thread {
                 sConfirmDialog = null;
             }
             if (mReboot && !mRebootSafeMode) {
-                // Determine if primary user is logged in
-                boolean isPrimary = UserHandle.getCallingUserId() == UserHandle.USER_OWNER;
+                // Include options in power menu for rebooting into recovery or bootloader
+                sConfirmDialog = new AlertDialog.Builder(context)
+                        .setTitle(titleResourceId)
+                        .setItems(
+                                com.android.internal.R.array.shutdown_reboot_options,
+                                new DialogInterface.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int which) {
+                                if (which < 0)
+                                    return;
 
-                // See if the advanced reboot menu is enabled
-                // (only if primary user) and check the keyguard state
-                int advancedReboot = isPrimary ? getAdvancedReboot(context) : 0;
-                KeyguardManager km = (KeyguardManager) context.getSystemService(
-                        Context.KEYGUARD_SERVICE);
-                boolean locked = km.inKeyguardRestrictedInputMode() && km.isKeyguardSecure();
+                                String actions[] = context.getResources().getStringArray(
+                                        com.android.internal.R.array.shutdown_reboot_actions);
 
-                if ((advancedReboot == 1 && !locked) || advancedReboot == 2) {
-                    // Include options in power menu for rebooting into recovery or bootloader
-                    sConfirmDialog = new AlertDialog.Builder(context)
-                            .setTitle(titleResourceId)
-                            .setItems(
-                                    com.android.internal.R.array.shutdown_reboot_options,
-                                    new DialogInterface.OnClickListener() {
-                                public void onClick(DialogInterface dialog, int which) {
-                                    if (which < 0)
-                                        return;
+                                if (actions != null && which < actions.length)
+                                    mRebootReason = actions[which];
 
-                                    String actions[] = context.getResources().getStringArray(
-                                            com.android.internal.R.array.shutdown_reboot_actions);
-
-                                    if (actions != null && which < actions.length)
-                                        mRebootReason = actions[which];
-
-                                    mReboot = true;
-                                    beginShutdownSequence(context);
+                                mReboot = true;
+                                beginShutdownSequence(context);
+                            }
+                        })
+                        .create();
+                        sConfirmDialog.setOnKeyListener(new DialogInterface.OnKeyListener() {
+                            public boolean onKey (DialogInterface dialog, int keyCode,
+                                    KeyEvent event) {
+                                if (keyCode == KeyEvent.KEYCODE_BACK) {
+                                    mReboot = false;
+                                    dialog.cancel();
                                 }
-                            })
-                            .create();
-                            sConfirmDialog.setOnKeyListener(new DialogInterface.OnKeyListener() {
-                                public boolean onKey (DialogInterface dialog, int keyCode,
-                                        KeyEvent event) {
-                                    if (keyCode == KeyEvent.KEYCODE_BACK) {
-                                        mReboot = false;
-                                        dialog.cancel();
-                                    }
-                                    return true;
-                                }
-                            });
-                }
+                                return true;
+                            }
+                        });
             }
 
             if (sConfirmDialog == null) {
@@ -249,12 +234,6 @@ public final class ShutdownThread extends Thread {
         } else {
             beginShutdownSequence(context);
         }
-    }
-
-    private static int getAdvancedReboot(Context context) {
-        int def = BuildInfo.getSlimBuildType().equals(BuildInfo.BUILD_TYPE_UNOFFICIAL) ? 1 : 0;
-        return Settings.Secure.getInt(context.getContentResolver(),
-                Settings.Secure.ADVANCED_REBOOT, def);
     }
 
     private static class CloseDialogReceiver extends BroadcastReceiver
